@@ -135,3 +135,13 @@ snmpbulkwalk -v2c -c public <ip> .1.3    # works out of the box (local truncatio
   — the local truncation patch (see Deviations) keeps snmpbulkwalk going
   where upstream would abort the walk with tooBig responses.
 - `espDeviceReset` SET takes effect within one loop (~ms).
+
+## License
+
+MIT (see LICENSE), Copyright (c) 2026 ThomasStolt — applies to all files
+except `lib/SNMP_Embedded`, which is vendored from SNMP_Embedded v3.4.4
+(github.com/syntax1269/SNMP_Embedded) and remains under its own MIT
+license, Copyright (c) 2026 syntax (lib/SNMP_Embedded/LICENSE). Local
+modifications inside `lib/SNMP_Embedded/src/` are marked
+"LOCAL ESP8266_SNMP PATCH" and are MIT-licensed derivative works of that
+library; clean upstreamable copies live in `patches/`.

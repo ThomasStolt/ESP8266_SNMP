@@ -19,13 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-Scope: this license applies to all files in this repository except
-lib/SNMP_Embedded, which is vendored from SNMP_Embedded v3.4.4
-(github.com/syntax1269/SNMP_Embedded) and remains under its own MIT
-license, Copyright (c) 2026 syntax, as found at lib/SNMP_Embedded/LICENSE.
-Local modifications inside lib/SNMP_Embedded/src/ are marked
-"LOCAL ESP8266_SNMP PATCH" and are MIT-licensed derivative works of that
-library; clean upstreamable copies of those changes are in patches/.
