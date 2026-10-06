@@ -1,0 +1,347 @@
+ESP8266-SNMP-MIB DEFINITIONS ::= BEGIN
+
+IMPORTS
+    MODULE-IDENTITY, OBJECT-IDENTITY, OBJECT-TYPE, NOTIFICATION-TYPE,
+    Integer32, Gauge32, IpAddress
+        FROM SNMPv2-SMI
+    DisplayString, TruthValue, MacAddress
+        FROM SNMPv2-TC
+    OBJECT-GROUP, NOTIFICATION-GROUP, MODULE-COMPLIANCE
+        FROM SNMPv2-CONF;
+
+-- Replace 99999 with your IANA Private Enterprise Number.
+-- http://www.iana.org/assignments/enterprise-numbers
+
+espSnmpMib MODULE-IDENTITY
+    LAST-UPDATED "202610050000Z"
+    ORGANIZATION "Private"
+    CONTACT-INFO "email: maintainer@example.com"
+    DESCRIPTION
+        "MIB for an ESP8266 SNMP agent supporting SNMPv1 and SNMPv2c.
+         The agent also serves the standard MIB-2 system group subset:
+         sysDescr.0, sysUpTime.0, sysName.0, sysLocation.0."
+    REVISION "202610050000Z"
+    DESCRIPTION "Initial revision."
+    ::= { enterprises 99999 }
+
+--
+-- Device group
+--
+espDevice OBJECT-IDENTITY
+    STATUS current
+    DESCRIPTION
+        "Device identity, heap health and control.
+
+         There is deliberately no 'total heap' object: on the ESP8266
+         the heap is all user RAM not consumed by firmware globals and
+         stacks, and the SDK exposes no total. Heap health is free
+         bytes, largest allocatable block, and fragmentation."
+    ::= { espSnmpMib 1 }
+
+espDeviceModel OBJECT-TYPE
+    SYNTAX DisplayString (SIZE (0..32))
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION "Board model string, e.g. ESP8266 / NodeMCU / Wemos D1 mini."
+    ::= { espDevice 1 }
+
+espDeviceFirmware OBJECT-TYPE
+    SYNTAX DisplayString (SIZE (0..32))
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION "Firmware version string, set at build time."
+    ::= { espDevice 2 }
+
+espDeviceChipId OBJECT-TYPE
+    SYNTAX Gauge32 (0..4294967295)
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION "ESP8266 chip id (26-bit, sourced from ESP.getChipId())."
+    ::= { espDevice 3 }
+
+espDeviceFreeHeap OBJECT-TYPE
+    SYNTAX Gauge32
+    UNITS "bytes"
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION "Currently available heap (ESP.getFreeHeap())."
+    ::= { espDevice 4 }
+
+espDeviceHeapLimit OBJECT-TYPE
+    SYNTAX Gauge32
+    UNITS "bytes"
+    MAX-ACCESS read-write
+    STATUS current
+    DESCRIPTION
+        "Low-heap trap threshold. Crossing below fires the
+         espTrapLowHeap notification once per boot (not re-armed until
+         free heap rises 1024 bytes above the limit)."
+    DEFVAL { 16384 }
+    ::= { espDevice 5 }
+
+espDeviceMaxFreeBlock OBJECT-TYPE
+    SYNTAX Gauge32
+    UNITS "bytes"
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION
+        "Largest single allocation that can currently succeed
+         (ESP.getMaxFreeBlockSize()). free heap can look healthy while
+         this is small, which predicts upcoming allocation failures."
+    ::= { espDevice 6 }
+
+espDeviceHeapFragmentation OBJECT-TYPE
+    SYNTAX Gauge32 (0..100)
+    UNITS "percent"
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION
+        "Heap fragmentation (ESP.getHeapFragmentation()). Values above
+         roughly 30 on this platform indicate trouble."
+    ::= { espDevice 7 }
+
+espDeviceLedState OBJECT-TYPE
+    SYNTAX INTEGER { off(0), on(1) }
+    MAX-ACCESS read-write
+    STATUS current
+    DESCRIPTION
+        "Onboard LED. On the common LED_BUILTIN active-low boards the
+         agent inverts the value; the value here is the logical state."
+    ::= { espDevice 8 }
+
+espDeviceReset OBJECT-TYPE
+    SYNTAX INTEGER { idle(0), reset(1) }
+    MAX-ACCESS read-write
+    STATUS current
+    DESCRIPTION
+        "Write reset(1) to reboot the device. The value never reads
+         back as anything but idle(0)."
+    ::= { espDevice 9 }
+
+espDeviceResetReason OBJECT-TYPE
+    SYNTAX DisplayString (SIZE (0..32))
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION
+        "Reason for the most recent reboot, verbatim from
+         ESP.getResetReason(): 'Power on', 'Hardware Watchdog',
+         'Exception', 'Software System reset', 'External System',
+         'Deep-Sleep Wake', etc. Attached to every espTrapBoot
+         notification."
+    ::= { espDevice 10 }
+
+espDeviceHardware OBJECT-TYPE
+    SYNTAX DisplayString (SIZE (0..32))
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION "CPU and board silicon string, e.g. 'ESP8266EX Xtensa
+                 LX106'. The ESP8266 exposes no readable silicon
+                 revision register; espDeviceChipId distinguishes units."
+    ::= { espDevice 11 }
+
+espDeviceCpuFreq OBJECT-TYPE
+    SYNTAX Gauge32
+    UNITS "MHz"
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION "CPU clock frequency (ESP.getCpuFreqMHz()): 80 or 160."
+    ::= { espDevice 12 }
+
+espDeviceSdkVersion OBJECT-TYPE
+    SYNTAX DisplayString (SIZE (0..32))
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION "ESP8266 non-OS SDK build string (ESP.getSdkVersion())."
+    ::= { espDevice 13 }
+
+espDeviceAuthFails OBJECT-TYPE
+    SYNTAX Counter32
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION
+        "Datagrams received with a wrong community string since boot.
+        Attached to the standard authenticationFailure traps this agent
+        emits (rate limited to one per second)."
+    ::= { espDevice 14 }
+
+--
+-- Flash group
+--
+espFlash OBJECT-IDENTITY
+    STATUS current
+    DESCRIPTION
+        "Flash chip geometry. Useful for judging whether an OTA update
+         will fit; none of these change at runtime."
+    ::= { espSnmpMib 3 }
+
+espFlashChipRealSize OBJECT-TYPE
+    SYNTAX Gauge32
+    UNITS "bytes"
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION
+        "Actual flash chip size detected on the SPI bus
+         (ESP.getFlashChipRealSize()). Can differ from the size the
+         image was linked for."
+    ::= { espFlash 1 }
+
+espFlashSketchSize OBJECT-TYPE
+    SYNTAX Gauge32
+    UNITS "bytes"
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION "Flash consumed by the running firmware image (ESP.getSketchSize())."
+    ::= { espFlash 2 }
+
+espFlashSketchSpaceFree OBJECT-TYPE
+    SYNTAX Gauge32
+    UNITS "bytes"
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION
+        "Space available for OTA updates (ESP.getFreeSketchSpace())."
+    ::= { espFlash 3 }
+
+espFlashChipSpeed OBJECT-TYPE
+    SYNTAX Gauge32
+    UNITS "hertz"
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION "Flash chip operating frequency (ESP.getFlashChipSpeed())."
+    ::= { espFlash 4 }
+
+--
+-- WiFi group (station role)
+--
+espWifi OBJECT-IDENTITY
+    STATUS current
+    DESCRIPTION
+        "WiFi station (STA) association state."
+    ::= { espSnmpMib 2 }
+
+espWifiState OBJECT-TYPE
+    SYNTAX INTEGER { down(0), connecting(1), up(2) }
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION "Current WiFi association state."
+    ::= { espWifi 1 }
+
+espWifiSsid OBJECT-TYPE
+    SYNTAX DisplayString (SIZE (0..32))
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION "SSID of the associated access point."
+    ::= { espWifi 2 }
+
+espWifiChannel OBJECT-TYPE
+    SYNTAX INTEGER (1..14)
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION "Current radio channel."
+    ::= { espWifi 3 }
+
+espWifiRssi OBJECT-TYPE
+    SYNTAX Integer32 (-120..0)
+    UNITS "dBm"
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION "Received signal strength of the associated AP."
+    ::= { espWifi 4 }
+
+espWifiBssid OBJECT-TYPE
+    SYNTAX MacAddress
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION "MAC address of the associated access point (zero when
+                 down)."
+    ::= { espWifi 5 }
+
+espWifiIpAddress OBJECT-TYPE
+    SYNTAX IpAddress
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION "Station IP address (0.0.0.0 when down)."
+    ::= { espWifi 6 }
+
+--
+-- Traps
+--
+espSnmpNotifications OBJECT-IDENTITY
+    STATUS current
+    DESCRIPTION "Trap identifiers; varbinds for each are listed in the
+                 NOTIFICATION-TYPE OBJECTS clause."
+    ::= { espSnmpMib 0 }
+
+espTrapBoot NOTIFICATION-TYPE
+    OBJECTS { espDeviceResetReason }
+    STATUS current
+    DESCRIPTION
+        "Device has booted; the varbind carries the reboot cause.
+         Cold start (power-on, external reset, hardware watchdog,
+         exception) maps to standard coldStart; a firmware-invoked
+         restart (Software System reset / Deep-Sleep Wake) maps to
+         warmStart.
+         SNMPv1: generic traps 0 (coldStart) / 1 (warmStart)."
+    ::= { espSnmpNotifications 4 }
+
+espTrapLowHeap NOTIFICATION-TYPE
+    OBJECTS { espDeviceFreeHeap, espDeviceHeapLimit }
+    STATUS current
+    DESCRIPTION
+        "Free heap dropped below espDeviceHeapLimit.
+         SNMPv1: enterprise-specific trap, specific number 3."
+    ::= { espSnmpNotifications 5 }
+
+--
+-- Conformance
+--
+espSnmpMibConformance OBJECT-IDENTITY
+    STATUS current
+    DESCRIPTION "Conformance groups."
+    ::= { espSnmpMib 4 }
+
+espSnmpMibCompliance MODULE-COMPLIANCE
+    STATUS current
+    DESCRIPTION "Everything is mandatory; the MIB is small."
+    MODULE -- this module
+    MANDATORY-GROUPS { espDeviceGroup, espWifiGroup, espFlashGroup,
+                       espTrapGroup }
+    OBJECT espDeviceHeapLimit
+    DESCRIPTION "Write access is optional (agent may run with default)."
+    ::= { espSnmpMibConformance 1 }
+
+espDeviceGroup OBJECT-GROUP
+    OBJECTS {
+        espDeviceModel, espDeviceFirmware, espDeviceChipId,
+        espDeviceFreeHeap, espDeviceHeapLimit, espDeviceMaxFreeBlock,
+        espDeviceHeapFragmentation, espDeviceLedState, espDeviceReset,
+        espDeviceResetReason, espDeviceHardware, espDeviceCpuFreq,
+        espDeviceSdkVersion, espDeviceAuthFails
+    }
+    STATUS current
+    DESCRIPTION "Device identity, heap health and control."
+    ::= { espSnmpMibConformance 2 }
+
+espWifiGroup OBJECT-GROUP
+    OBJECTS {
+        espWifiState, espWifiSsid, espWifiChannel, espWifiRssi,
+        espWifiBssid, espWifiIpAddress
+    }
+    STATUS current
+    DESCRIPTION "WiFi association state."
+    ::= { espSnmpMibConformance 3 }
+
+espFlashGroup OBJECT-GROUP
+    OBJECTS { espFlashChipRealSize, espFlashSketchSize,
+              espFlashSketchSpaceFree, espFlashChipSpeed }
+    STATUS current
+    DESCRIPTION "Flash geometry."
+    ::= { espSnmpMibConformance 4 }
+
+espTrapGroup NOTIFICATION-GROUP
+    NOTIFICATIONS { espTrapBoot, espTrapLowHeap }
+    STATUS current
+    DESCRIPTION "All spontaneous notifications."
+    ::= { espSnmpMibConformance 5 }
+
+END

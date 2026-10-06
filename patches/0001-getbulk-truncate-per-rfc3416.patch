@@ -1,0 +1,43 @@
+Subject: [PATCH] GETBULK: return a truncated response per RFC 3416 4.2.3 instead of tooBig
+
+--- a/src/SNMPZeroCopy.cpp
++++ b/src/SNMPZeroCopy.cpp
+@@ -246,7 +246,12 @@
+     }
+ 
+     /* Repeaters walk from the request OID, then from each selected handler
+-     * OID.  The cursor is always staged data, never a request-buffer slice. */
++     * OID.  The cursor is always staged data, never a request-buffer slice.
++     *
++     * LOCAL ESP8266_SNMP PATCH (RFC 3416 4.2.3): when the plan is full,
++     * STOP adding and return what fits — truncated response, not tooBig.
++     * Upstream returned stageGetBulk=false -> tooBig when NMS bulkwalks
++     * with max-repetitions > SNMP_MAX_VARBINDS. */
+     for(unsigned int i = nonRepeaterCount;
+         i < (unsigned int)request.varbindCount; i++){
+         OidWire cursor;
+@@ -256,6 +261,9 @@
+         int foundAt = 0;
+ 
+         for(unsigned int repetition = 0; repetition < maxRepetitions; repetition++){
++            if(plan.count >= SNMP_MAX_VARBINDS){
++                break;   /* plan full: normal truncation per RFC 3416 */
++            }
+             ValueCallback* callback = ValueCallback::findCallbackForSlice(
+                 callbacks, callbacksCount, cursor.bytes + 2, (int)cursor.len - 2,
+                 true, foundAt, &foundAt);
+--- a/src/SNMPPDUHandler.cpp
++++ b/src/SNMPPDUHandler.cpp
+@@ -165,6 +165,12 @@
+             int foundAt = 0;
+ 
+             for(unsigned int j = 0; j < maxRepititions; j++){
++                /* LOCAL ESP8266_SNMP PATCH (RFC 3416 4.2.3): full response
++                 * array = STOP and return what fits (truncated response),
++                 * not bulkOverflow -> tooBig which aborts snmpbulkwalk. */
++                if(outResponseCount >= SNMP_MAX_VARBINDS){
++                    break;
++                }
+                 SNMP_LOGD("finding next callback for OID: %s\n", oid->string());
+                 ValueCallback* callback = ValueCallback::findCallback(callbacks, callbacksCount, oid, true, foundAt, &foundAt);
+                 if(!callback){

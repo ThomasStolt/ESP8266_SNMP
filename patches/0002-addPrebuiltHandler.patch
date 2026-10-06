@@ -1,0 +1,18 @@
+Subject: [PATCH] SNMPAgent: add addPrebuiltHandler() public registration path
+
+--- a/src/SNMP_Embedded.h
++++ b/src/SNMP_Embedded.h
+@@ -274,6 +274,13 @@
+             setOccurred = false;
+         }
+ 
++        /* Local ESP8266_SNMP extension (not upstream): register a fully
++         * built ValueCallback (e.g. custom types like raw-octet MAC). The
++         * factories dispatch to the same private addHandler; this is that
++         * path made public for extension types. */
++        ValueCallback* addPrebuiltHandler(ValueCallback* callback, bool isSettable = false){
++            return addHandler(callback, isSettable);
++        }
+         bool removeHandler(ValueCallback* callback);
+         bool sortHandlers();
+ 
