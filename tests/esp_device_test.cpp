@@ -537,7 +537,7 @@ TEST_CASE( "esp: v1 dialect builds TrapPDU with correct enterprise/generic/speci
 static void buildBulkRoster(ValueCallback** callbacks, int* count,
                             int32_t* vals, int n){
     for(int i = 0; i < n; i++){
-        char oid[32];
+        char oid[48]; // gcc -Wformat-truncation: worst-case "%d" expansion needs 33+
         snprintf(oid, sizeof(oid), ".1.3.6.1.4.1.990000.1.%d", i + 1);
         vals[i] = 100 + i;
         callbacks[(*count)++] = new IntegerCallback(new SortableOIDType(oid), &vals[i]);
