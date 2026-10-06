@@ -413,6 +413,8 @@ static bool writeErrorResponse(uint8_t* buffer, size_t maxPacketSize,
         return false;
     }
     *responseLength = (int)writer.length();
+    /* LOCAL ESP8266_SNMP PATCH: tx byte total */
+    ASNPool::txBytes += (size_t)*responseLength;
     return true;
 }
 
@@ -455,6 +457,8 @@ static bool writeNormalResponse(uint8_t* buffer, size_t maxPacketSize,
         return false;
     }
     *responseLength = (int)writer.length();
+    /* LOCAL ESP8266_SNMP PATCH: tx byte total */
+    ASNPool::txBytes += (size_t)*responseLength;
     return true;
 }
 
@@ -473,6 +477,8 @@ SNMP_ERROR_RESPONSE handlePacketInPlace(uint8_t* buffer, int packetLength,
     if(!buffer || packetLength <= 0 || !responseLength || max_packet_size <= 0){
         return SNMP_REQUEST_INVALID;
     }
+    /* LOCAL ESP8266_SNMP PATCH: rx byte total (SNMP plane) */
+    ASNPool::rxBytes += (size_t)packetLength;
 
     SnmpHeaderView request;
     if(!snmp_ber_peek_packet(buffer, (size_t)packetLength, &request)){

@@ -16,6 +16,8 @@ static SNMP_PERMISSION getPermissionOfRequest(const SNMPPacket& request, const c
 
 SNMP_ERROR_RESPONSE handlePacket(uint8_t* buffer, int packetLength, int* responseLength, int max_packet_size, ValueCallback* const *callbacks, int callbacksCount, const char* _community, const char* _readOnlyCommunity, informCB informCallback, void* ctx){
     SNMPPacket request;
+    /* LOCAL ESP8266_SNMP PATCH: rx byte total (SNMP plane) */
+    ASNPool::rxBytes += (size_t)packetLength;
 
     SNMP_PACKET_PARSE_ERROR parseResult = request.parseFrom(buffer, packetLength);
     if(parseResult <= 0){
@@ -145,6 +147,9 @@ SNMP_ERROR_RESPONSE handlePacket(uint8_t* buffer, int packetLength, int* respons
         }
         return SNMP_ERROR_PACKET_SENT;
     }
+    /* LOCAL ESP8266_SNMP PATCH: tx byte total — final response length is
+     * known here after both the normal and tooBig rebuild paths. */
+    ASNPool::txBytes += (size_t)*responseLength;
 
     return handleStatus;
 }

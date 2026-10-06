@@ -74,6 +74,11 @@ struct ASNPool {
     static size_t malformedPackets;
     static size_t tooBigResponses;
     static size_t allocationFailures;
+    /* LOCAL ESP8266_SNMP PATCH: SNMP-plane datagram byte totals, both
+     * dispatch paths — feeds RFC 2863 ifInOctets/ifOutOctets on platforms
+     * where the management plane is the observable interface. */
+    static size_t rxBytes;
+    static size_t txBytes;
     static bool permFrozen;     /* true once the startup baseline is frozen */
     static uint32_t lockInMs;   /* v3.3.0: millis() reading when the arena was pre-allocated (0 = not locked at ctor time / static BSS) */
 

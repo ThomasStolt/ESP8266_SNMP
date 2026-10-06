@@ -815,3 +815,124 @@ TEST_CASE( "esp: GETBULK nonRepeaters=1 answered first, repeaters truncated at c
 
     for(int i = 0; i < callbacksCount; i++) delete callbacks[i];
 }
+
+/* ==========================================================================
+ * P1 byte counters — ASNPool::rxBytes / ASNPool::txBytes (LOCAL
+ * ESP8266_SNMP SNMP-plane datagram totals).  Contract (both dispatch
+ * paths): a served request adds at least the serialised request length to
+ * rxBytes and at least the serialised response length to txBytes; a
+ * malformed datagram still counts rxBytes but must leave txBytes untouched
+ * (no response bytes are ever written for an unparseable datagram).
+ *
+ * Catch2 re-runs the case once per SECTION, so per-path facts live in
+ * static locals and the cross-path "identical byte accounting" assertions
+ * run once, on the second (last) expansion when both paths have been
+ * exercised.  Counters are reset at case start as the contract states.
+ * ========================================================================== */
+TEST_CASE( "P1 byte counters: 2-varbind GET counts rx/tx by exact serialised lengths, both dispatch paths", "[esp][stats]" ){
+    DeviceRoster roster;
+    uint8_t buf[800] = {0};
+
+    ASNPool::rxBytes = 0;
+    ASNPool::txBytes = 0;
+
+    const char* oids[] = { OID_sysUpTime, OID_sysDescr };
+    SNMPPacket* request = buildGetRequest(oids, 2);
+    int reqLen = request->serialiseInto(buf, sizeof(buf));
+    REQUIRE( reqLen > 0 );
+
+    /* static: survive the per-section case re-runs so both paths can be
+     * compared against each other on the second expansion. */
+    static size_t rxClassic = 0, txClassic = 0, rxZeroCopy = 0, txZeroCopy = 0;
+    static int respClassic = 0, respZeroCopy = 0;
+    static int sectionRuns = 0;
+    static int savedReqLen = 0;
+    sectionRuns++;
+    savedReqLen = reqLen;
+
+    SECTION( "classic handlePacket" ){
+        uint8_t req[800];
+        memcpy(req, buf, (size_t)reqLen);
+        respClassic = 0;
+        SNMP_ERROR_RESPONSE r = handlePacket(req, reqLen, &respClassic, (int)sizeof(req),
+                                              roster.callbacks, roster.count, "public", "private");
+        REQUIRE( r == SNMP_GET_OCCURRED );
+        REQUIRE( respClassic > 0 );
+        rxClassic = ASNPool::rxBytes;
+        txClassic = ASNPool::txBytes;
+        /* rx counts at least the serialised request length;
+         * tx counts at least the serialised response length. */
+        REQUIRE( rxClassic >= (size_t)savedReqLen );
+        REQUIRE( txClassic >= (size_t)respClassic );
+    }
+
+    SECTION( "zero-copy handlePacketInPlace" ){
+        uint8_t req[800];
+        memcpy(req, buf, (size_t)reqLen);
+        respZeroCopy = 0;
+        SNMP_ERROR_RESPONSE r = handlePacketInPlace(req, reqLen, &respZeroCopy, (int)sizeof(req),
+                                                     roster.callbacks, roster.count, "public", "private");
+        REQUIRE( r == SNMP_GET_OCCURRED );
+        REQUIRE( respZeroCopy > 0 );
+        rxZeroCopy = ASNPool::rxBytes;
+        txZeroCopy = ASNPool::txBytes;
+        REQUIRE( rxZeroCopy >= (size_t)savedReqLen );
+        REQUIRE( txZeroCopy >= (size_t)respZeroCopy );
+    }
+
+    delete request;
+
+    /* Cross-path byte accounting: both dispatchers serve the same request
+     * bytes and produce byte-identical responses, so the (rx, tx) deltas
+     * must match exactly.  Only decidable once BOTH sections have run. */
+    if(sectionRuns >= 2){
+        REQUIRE( rxClassic  == rxZeroCopy );
+        REQUIRE( txClassic  == txZeroCopy );
+        REQUIRE( txClassic  > 0 );
+        REQUIRE( respClassic == respZeroCopy );
+    }
+}
+
+TEST_CASE( "P1 byte counters: malformed packet counts rxBytes only, txBytes unchanged, both dispatch paths", "[esp][stats]" ){
+    DeviceRoster roster;
+
+    /* 40 bytes of 0xFF: not a BER SNMP message on either dispatcher
+     * (classic parseFrom fails; zero-copy BER header peek fails. */
+    uint8_t junk[40];
+    memset(junk, 0xFF, sizeof(junk));
+    const int junkLen = (int)sizeof(junk);
+
+    size_t baseMal = ASNPool::malformedPackets;
+
+    SECTION( "classic handlePacket" ){
+        uint8_t pkt[40];
+        memcpy(pkt, junk, sizeof(junk));
+
+        ASNPool::rxBytes = 0;
+        ASNPool::txBytes = 0;
+        int respLen = -1;   /* sentinel: no response bytes may be produced */
+        SNMP_ERROR_RESPONSE r = handlePacket(pkt, junkLen, &respLen, (int)sizeof(pkt),
+                                              roster.callbacks, roster.count, "public", "private");
+        REQUIRE( r == SNMP_REQUEST_INVALID );
+        REQUIRE( respLen <= 0 );                       /* no response emitted */
+        REQUIRE( ASNPool::rxBytes >= (size_t)junkLen ); /* datagram still counted */
+        REQUIRE( ASNPool::txBytes == 0 );               /* nothing transmitted   */
+        REQUIRE( ASNPool::malformedPackets == baseMal + 1 );
+    }
+
+    SECTION( "zero-copy handlePacketInPlace" ){
+        uint8_t pkt[40];
+        memcpy(pkt, junk, sizeof(junk));
+
+        ASNPool::rxBytes = 0;
+        ASNPool::txBytes = 0;
+        int respLen = -1;
+        SNMP_ERROR_RESPONSE r = handlePacketInPlace(pkt, junkLen, &respLen, (int)sizeof(pkt),
+                                                     roster.callbacks, roster.count, "public", "private");
+        REQUIRE( r == SNMP_REQUEST_INVALID );
+        REQUIRE( respLen <= 0 );
+        REQUIRE( ASNPool::rxBytes >= (size_t)junkLen );
+        REQUIRE( ASNPool::txBytes == 0 );
+        REQUIRE( ASNPool::malformedPackets == baseMal + 1 );
+    }
+}

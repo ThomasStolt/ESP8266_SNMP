@@ -40,19 +40,27 @@ Standard groups (no private MIB needed):
   `ifSpecific` (handled as empty octets — see "Deviations")
 
 Private tree `1.3.6.1.4.1.99999`: device identity (model, firmware, chipId,
-hardware string `ESP8266EX Xtensa LX106`, CPU MHz, SDK version), heap health
+hardware string `ESP8266EX Xtensa LX106`, CPU MHz, SDK version), hardware
+instruments (`espDeviceCpuCores`=1 and `espDeviceCpuUtilization` loop-rate
+proxy, `espDeviceSupplyVoltage` in mV (NodeMCU A0 divider reads it low —
+use `ADC_MODE(ADC_VCC)`), `espDeviceProcesses` always 1 (NONOS has no
+scheduler), RAM total 81920 with `espDeviceHeapTotal` boot snapshot and
+`espDeviceHeapUtilization` derived from it), heap health
 (free/max-block/fragmentation, RW `espDeviceHeapLimit`), control (RW LED,
 RW `espDeviceReset` — write 1 to reboot), `espDeviceResetReason`,
 `espDeviceAuthFails`, WiFi state/SSID/channel/RSSI/BSSID/IP, flash
-geometry/speed. ~25 walkable objects total.
+geometry/speed. ~32 walkable objects total.
 
-Counters (`ifInUcastPkts`, `ifInDiscards`, authFails, ...) are fed from the
-engine's runtime stats and the request loop — they measure the SNMP
-management plane. The ESP8266 Arduino lwIP port routes WiFi RX/TX through
-the closed-source SDK blob, which bypasses every observable stats hook
-(established by building instrumented lwIP three ways in this project's
-history); non-SNMP traffic totals cannot be counted honestly on this
-platform, and the zero-valued columns are documented as such in the MIB.
+Byte counters (`ifInOctets`/`ifOutOctets`) count SNMP-plane BYTES via the
+engine-level `ASNPool::rxBytes`/`txBytes` counters (local patch — see
+"Deviations"); datagram counters (`ifInUcastPkts`, `ifInDiscards`, authFails,
+...) are fed from the engine's runtime stats and the request loop — together
+they measure only the SNMP management plane. The ESP8266 Arduino lwIP port
+routes WiFi RX/TX through the closed-source SDK blob, which bypasses every
+observable stats hook (established by building instrumented lwIP three ways
+in this project's history); non-SNMP traffic totals cannot be counted
+honestly on this platform, and the zero-valued columns are documented as
+such in the MIB.
 
 ## Traps
 
@@ -134,6 +142,9 @@ snmpbulkwalk -v2c -c public <ip> .1.3    # works out of the box (local truncatio
 - GETBULK walks the tree in batches of up to 8 varbinds (`SNMP_MAX_VARBINDS`)
   — the local truncation patch (see Deviations) keeps snmpbulkwalk going
   where upstream would abort the walk with tooBig responses.
+- `espDeviceCpuUtilization` is a loop-rate proxy (the ESP8266 has no
+  hardware idle counter); `espDeviceSupplyVoltage` requires a
+  `ADC_MODE(ADC_VCC)` build and reads low on NodeMCU (A0 divider).
 - `espDeviceReset` SET takes effect within one loop (~ms).
 
 ## License

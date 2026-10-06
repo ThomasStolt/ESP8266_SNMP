@@ -1,10 +1,16 @@
 // ESP8266 SNMP agent firmware — v1 + v2c, GET/GETNEXT/GETBULK/SET, traps.
 // Engine: SNMP_Embedded v3.4.4 (vendored at lib/SNMP_Embedded, MIT).
 // Device MIB: mibs/ESP8266-SNMP-MIB.mib (OIDs frozen, enterprise 99999).
+// ADC samples internal supply (not A0) so espDeviceSupplyVoltage can be
+// served; NodeMCU's external divider biases getVcc() LOW — indicative
+// only, per the MIB. Macro must expand before the core reads it in init().
 #include <ESP8266WiFi.h>
 #include <WiFiUdp.h>
 #include <SNMP_Embedded.h>
 #include <cstring>
+#ifndef ESP_SNMP_NO_VCC
+ADC_MODE(ADC_VCC)
+#endif
 
 #ifndef WIFI_SSID
 #define WIFI_SSID "changeme"
@@ -69,6 +75,14 @@ static const char* sdkVersion = "";   // assigned once at boot (getSdkVersion)
 static char sdkVersionBuf[33];
 static uint32_t cpuFreq = 80;
 static uint32_t authFails = 0;
+// CPU/memory extension (espDevice 15-21 per MIB)
+static int cpuCores = 1;              // ESP8266EX single core
+static uint32_t cpuUtilization = 0;   // loop-rate proxy, 0..100 %
+static uint32_t supplyVoltage = 0;    // ESP.getVcc() mV (A0-divider biased)
+static uint32_t processes = 1;        // NONOS: no scheduler, one image
+static uint32_t heapTotal = 0;        // free heap snapshot at first loop
+static uint32_t heapUtilization = 0;  // 100*(1-free/total)
+static uint32_t ramTotal = 81920;     // ESP8266EX physical DRAM
 
 // WiFi group
 static uint32_t wifiState = 1;      // 0 down / 1 connecting / 2 up
@@ -221,15 +235,20 @@ static void refresh() {
     prevPacketsRejected = st.packets_rejected;
     prevMalformed = st.malformed_packets;
   }
-  // Octet totals: the engine exposes datagram counts, not byte counts. The
-  // ifIn/OutOctet variables accumulate the actual datagram sizes observed
-  // at this sketch's own UDP reads via loop() polling below (the engine
-  // owns the socket; we read the same stats). Byte-accurate counting of the
-  // management plane therefore approximates: mean SNMP datagram IS the
-  // payload; we keep last-known engine stats only. (Ponytail ceiling: byte
-  // counters are approximate — datagrams x 64 B average. Documented in MIB.)
-
-  authFails = st.packets_rejected;
+  // Octet totals — LOCAL engine patch: ASNPool::rxBytes/txBytes accumulate
+  // exact SNMP-plane datagram bytes (both dispatch paths, both dialects).
+  ifInOctets = (uint32_t)ASNPool::rxBytes;
+  ifOutOctets = (uint32_t)ASNPool::txBytes;
+  // Heap total: SDK has no heap "total"; free-at-first-loop is the defensible
+  // snapshot. Utilization derived; voltage via getVcc (divider-biased, mV).
+  if (heapTotal == 0 && freeHeap > 0) heapTotal = freeHeap;
+  if (heapTotal) {
+    heapUtilization = freeHeap >= heapTotal ? 0
+        : (uint32_t)(100UL * (heapTotal - freeHeap) / heapTotal);
+  }
+#ifndef ESP_SNMP_NO_VCC
+  supplyVoltage = ESP.getVcc();   // ADC_MODE VCC; NodeMCU A0 divider reads low
+#endif
 
   // WiFi/interface state
   if (WiFi.status() == WL_CONNECTED) {
@@ -336,6 +355,17 @@ void setup() {
     snmp.addReadWriteStringHandler(".1.3.6.1.4.1.99999.1.13.0", &sdkPtr, sizeof(sdkVersionBuf), false);
   }
   snmp.addCounter32Handler(".1.3.6.1.4.1.99999.1.14.0", &authFails);
+  // CPU/memory extension (espDevice 15-21; see MIB DESCRIPTIONs for the
+  // proxy semantics and the NONOS single-process truth)
+  snmp.addIntegerHandler(".1.3.6.1.4.1.99999.1.15.0", &cpuCores);
+  snmp.addGaugeHandler(".1.3.6.1.4.1.99999.1.16.0", &cpuUtilization);
+#ifndef ESP_SNMP_NO_VCC
+  snmp.addGaugeHandler(".1.3.6.1.4.1.99999.1.17.0", &supplyVoltage);
+#endif
+  snmp.addGaugeHandler(".1.3.6.1.4.1.99999.1.18.0", &processes);
+  snmp.addGaugeHandler(".1.3.6.1.4.1.99999.1.19.0", &heapTotal);
+  snmp.addGaugeHandler(".1.3.6.1.4.1.99999.1.20.0", &heapUtilization);
+  snmp.addGaugeHandler(".1.3.6.1.4.1.99999.1.21.0", &ramTotal);
 
   // ---- WiFi group ---------------------------------------------------
   snmp.addIntegerHandler(".1.3.6.1.4.1.99999.2.1.0", (int*)&wifiState);
@@ -378,6 +408,22 @@ void loop() {
   refresh();
   snmp.loop();
 
+  // CPU utilization proxy: count loop() iterations per 1 s window; SYS work
+  // (WiFi/MAC/SNMP) runs in the same context and steals iterations, so rate
+  // loss tracks all-cause busy. Baseline = best rate ever observed.
+  static uint32_t loopCount = 0, windowStart = 0, bestRate = 0;
+  loopCount++;
+  const uint32_t nowMs = millis();
+  if (nowMs - windowStart >= 1000) {
+    const uint32_t rate = loopCount * 1000UL / (nowMs - windowStart);
+    if (rate > bestRate) bestRate = rate;   // ratchet: idle is the benchmark
+    if (bestRate) {
+      cpuUtilization = rate >= bestRate ? 0
+          : (uint32_t)(100UL * (bestRate - rate) / bestRate);
+    }
+    loopCount = 0;
+    windowStart = nowMs;
+  }
   // wifi state transition logging (linkUp/Down traps intentionally omitted)
   if (wifiState != lastWifiState) {
     if (wifiState == 2) {

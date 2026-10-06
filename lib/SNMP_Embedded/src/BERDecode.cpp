@@ -58,6 +58,9 @@ size_t ASNPool::packetsRejected      = 0;
 size_t ASNPool::malformedPackets     = 0;
 size_t ASNPool::tooBigResponses      = 0;
 size_t ASNPool::allocationFailures   = 0;
+/* LOCAL ESP8266_SNMP PATCH */
+size_t ASNPool::rxBytes             = 0;
+size_t ASNPool::txBytes             = 0;
 
 void ASNPool::release(BER_CONTAINER* p){
     if(!p) return;
