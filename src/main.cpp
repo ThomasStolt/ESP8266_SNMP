@@ -1,14 +1,17 @@
 // ESP8266 SNMP agent firmware — v1 + v2c, GET/GETNEXT/GETBULK/SET, traps.
 // Engine: SNMP_Embedded v3.4.4 (vendored at lib/SNMP_Embedded, MIT).
 // Device MIB: mibs/ESP8266-SNMP-MIB.mib (OIDs frozen, enterprise 99999).
-// ADC samples internal supply (not A0) so espDeviceSupplyVoltage can be
-// served; NodeMCU's external divider biases getVcc() LOW — indicative
-// only, per the MIB. Macro must expand before the core reads it in init().
+// ESP_SNMP_ENABLE_VCC (opt-in): serves espDeviceSupplyVoltage via
+// ESP.getVcc(). DISABLED BY DEFAULT: on boards with an A0 voltage divider
+// (NodeMCU, Wemos D1) ADC_VCC mode is known to break WiFi association
+// (verified live on this device: boots fine, never associates). It reads
+// LOW due to the divider. Enable only on bare-module builds without the
+// divider. Macro must expand before the core reads it in init().
 #include <ESP8266WiFi.h>
 #include <WiFiUdp.h>
 #include <SNMP_Embedded.h>
 #include <cstring>
-#ifndef ESP_SNMP_NO_VCC
+#ifdef ESP_SNMP_ENABLE_VCC
 ADC_MODE(ADC_VCC)
 #endif
 
@@ -246,8 +249,8 @@ static void refresh() {
     heapUtilization = freeHeap >= heapTotal ? 0
         : (uint32_t)(100UL * (heapTotal - freeHeap) / heapTotal);
   }
-#ifndef ESP_SNMP_NO_VCC
-  supplyVoltage = ESP.getVcc();   // ADC_MODE VCC; NodeMCU A0 divider reads low
+#ifdef ESP_SNMP_ENABLE_VCC
+  supplyVoltage = ESP.getVcc();
 #endif
 
   // WiFi/interface state
@@ -359,7 +362,7 @@ void setup() {
   // proxy semantics and the NONOS single-process truth)
   snmp.addIntegerHandler(".1.3.6.1.4.1.99999.1.15.0", &cpuCores);
   snmp.addGaugeHandler(".1.3.6.1.4.1.99999.1.16.0", &cpuUtilization);
-#ifndef ESP_SNMP_NO_VCC
+#ifdef ESP_SNMP_ENABLE_VCC
   snmp.addGaugeHandler(".1.3.6.1.4.1.99999.1.17.0", &supplyVoltage);
 #endif
   snmp.addGaugeHandler(".1.3.6.1.4.1.99999.1.18.0", &processes);
