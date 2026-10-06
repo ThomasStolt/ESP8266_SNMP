@@ -2,3 +2,4 @@
 tests/build/
 *.o
 *.d
+.env
