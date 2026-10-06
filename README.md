@@ -17,6 +17,7 @@ this project's: MIB file, ifTable, device objects, traps, NMS fan-out.
 |---|---|
 | `mibs/ESP8266-SNMP-MIB.mib` | Device MIB (SMIv2, enterprise 99999 — replace with your IANA PEN) |
 | `src/main.cpp` | Firmware: registers all OID handlers against plain C backing variables refreshed each loop; trap logic |
+| `.env` (local, gitignored) / `.env.example` | WiFi credentials — injected at build time by `load_env.py` |
 | `lib/SNMP_Embedded/` | Vendored SNMP_Embedded engine (MIT, © 2026 syntax, v3.4.4) + technical manual |
 | `tests/` | Catch2 host suite: upstream 39 cases + `esp_device_test.cpp` (type fidelity, multi-VB GET, community enforcement, SET semantics, v1/v2c trap wire formats) |
 | `platformio.ini` | Build config; size flags MUST stay global (library one-definition rule) |
@@ -74,6 +75,15 @@ switch dialect; `trapv2` back):
 | authenticationFailure | bad-community datagram | standard `.5.5`; varbind is cumulative `espDeviceAuthFails`; rate-limited to 1/s (flood must not spray the NMS). The offending request itself is never answered on the wire |
 
 ## Build & flash
+
+First build only: copy the credential template and fill in your WiFi.
+
+```
+cp .env.example .env    # then edit .env with your SSID/password
+```
+
+.env is gitignored — secrets never reach the repository; load_env.py
+(pre-build hook) injects them into the firmware build.
 
 ```
 pio run                 # build (RAM ~43.6% incl. engine pool)
