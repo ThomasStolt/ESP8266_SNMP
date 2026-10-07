@@ -3,3 +3,4 @@ tests/build/
 *.o
 *.d
 .env
+.env.bhnm-b
