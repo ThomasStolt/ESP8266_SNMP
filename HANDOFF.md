@@ -6,11 +6,25 @@ SNMPv1/v2c agent for ESP8266. **Protocol engine: vendored SNMP_Embedded v3.4.4**
 (MIT, `lib/SNMP_Embedded/`). **All device value in `src/main.cpp`** (the only
 firmware source — old hand-rolled BER/agent/traps were deleted in clean cutover).
 
-- `mibs/ESP8266-SNMP-MIB.mib` — device MIB, enterprise 99999 (placeholder PEN),
-  25 objects + boot/lowHeap trap definitions. FROZEN OIDs (contract).
-- `tests/` — catch2 host suite: upstream 39 cases + `esp_device_test.cpp`
-  (device semantics). `cd tests && make test` → 45/45, 2442 assertions.
-- `README.md` — current, includes verified deviations from upstream.
+- `mibs/ESP8266-SNMP-MIB.mib` — private-root MIB, enterprise 99999
+  (placeholder PEN), 20 objects (espDevice 14 + espWifi 6) + boot/lowHeap
+  trap definitions. FROZEN OIDs (contract). CPU/memory/disk objects
+  MOVED OUT of this MIB into the standard RFC 2790 Host Resources MIB
+  (`1.3.6.1.2.1.25`, registered directly in src/main.cpp — hrSystemUptime,
+  hrSystemProcesses, hrMemorySize, hrStorageTable RAM+Flash rows,
+  hrDeviceTable CPU row, hrProcessorLoad); hrSWRun*/hrFS* DO NOT FIT:
+  every column costs one ASN-pool slot; the full set (cap 88) left <2 KiB
+  free and WiFi never associated (measured; fixed cap back to 80 after
+  on-device OOM crash loops — see sendTrapToAll's OOM guard). Vcc
+  (espDeviceSupplyVoltage) removed entirely, no RFC 2790 equivalent,
+  along with the ESP_SNMP_ENABLE_VCC flag.
+- `tests/` — `cd tests && make test` → 52/52, 2587 assertions (45
+  upstream+device cases + RFC2790 multi-varbind GET case). OID arcs:
+  hrDeviceTable = 25.3.2, hrProcessor = 25.3.3 (verify with `snmptranslate
+  -On HOST-RESOURCES-MIB::hrProcessorLoad` if in doubt). Live walk count
+  under `1.3.6.1.2.1.25`: 22 objects.
+- `README.md` — current: RFC 2790 serving list incl. hrSystemUptime, the
+  hrSWRun/hrFS RAM ceiling, and the trap OOM guard.
 - `platformio.ini` — WiFi creds via build_flags (placeholders in the public repo; set locally), communities
   public/private via src/main.cpp SNMPAgent ctor.
 
@@ -71,11 +85,14 @@ firmware source — old hand-rolled BER/agent/traps were deleted in clean cutove
 ## Verified-done (do not redo)
 
 Device interop vs real net-snmp: multi-VB panel GET ✓, 22-row ifTable with
-correct types ✓, 25-object named enterprise walk ✓, SET led + denied writes ✓,
+correct types ✓, 20-object named enterprise walk ✓ (25 pre-migration;
+CPU/memory/disk now under RFC 2790 hr* tree), SET led + denied writes ✓,
 coldStart v2c trap captured byte-for-byte (113 B, snmpTrapOID .5.1 +
 "External System" varbind) ✓, authFail trap + watermark 1/s latch ✓,
 espDeviceReset reboot via SET ✓. Host suite 45/45 ✓. Clean rebuild ✓.
 
 Possible future work (nothing pending): stricter PEN registration (replace
-99999), snmptrapd runbook for the second NMS, OTA/partition awareness for
-espFlashSketchSpaceFree meaning.
+99999 private root — the tree is now identity/heap/WiFi only; CPU/memory/
+disk live under the standard RFC 2790 `.1.3.6.1.2.1.25` tree), snmptrapd
+runbook for the second NMS, OTA/partition awareness for the Flash
+hrStorage row's used value (sketch size; hrStorageSize counts whole chip).

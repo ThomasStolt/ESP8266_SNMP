@@ -13,13 +13,19 @@ IMPORTS
 -- http://www.iana.org/assignments/enterprise-numbers
 
 espSnmpMib MODULE-IDENTITY
-    LAST-UPDATED "202610050000Z"
+    LAST-UPDATED "202610070000Z"
     ORGANIZATION "Private"
     CONTACT-INFO "email: maintainer@example.com"
     DESCRIPTION
         "MIB for an ESP8266 SNMP agent supporting SNMPv1 and SNMPv2c.
          The agent also serves the standard MIB-2 system group subset:
-         sysDescr.0, sysUpTime.0, sysName.0, sysLocation.0."
+         sysDescr.0, sysUpTime.0, sysName.0, sysLocation.0. CPU,
+         memory (RAM total/used), flash storage and process count are
+         served under the standard RFC 2790 Host Resources MIB
+         (.1.3.6.1.2.1.25)."
+    REVISION "202610070000Z"
+    DESCRIPTION "Moved CPU, memory, flash and process objects to the
+                 standard RFC 2790 Host Resources MIB."
     REVISION "202610050000Z"
     DESCRIPTION "Initial revision."
     ::= { enterprises 99999 }
@@ -32,10 +38,10 @@ espDevice OBJECT-IDENTITY
     DESCRIPTION
         "Device identity, heap health and control.
 
-         There is deliberately no 'total heap' object: on the ESP8266
-         the heap is all user RAM not consumed by firmware globals and
-         stacks, and the SDK exposes no total. Heap health is free
-         bytes, largest allocatable block, and fragmentation."
+         The SDK exposes no heap total; heap health here is free
+         bytes, largest allocatable block, and fragmentation. CPU,
+         memory, flash and process totals are served under the
+         standard Host Resources MIB (.1.3.6.1.2.1.25)."
     ::= { espSnmpMib 1 }
 
 espDeviceModel OBJECT-TYPE
@@ -164,128 +170,6 @@ espDeviceAuthFails OBJECT-TYPE
         emits (rate limited to one per second)."
     ::= { espDevice 14 }
 
-
-espDeviceCpuCores OBJECT-TYPE
-    SYNTAX Integer32
-    MAX-ACCESS read-only
-    STATUS current
-    DESCRIPTION
-        "Number of CPU cores. ESP8266EX single-core: always 1."
-    ::= { espDevice 15 }
-
-espDeviceCpuUtilization OBJECT-TYPE
-    SYNTAX Gauge32 (0..100)
-    UNITS "percent"
-    MAX-ACCESS read-only
-    STATUS current
-    DESCRIPTION
-        "Proxy: share of the last one-second window the application
-         loop did NOT wait idle. There is no hardware idle counter on
-         ESP8266; SYS-context work (WiFi/MAC/SNMP) steals loop ticks,
-         so loop-rate loss tracks all-cause busy. Baseline = best rate
-         ever observed; expect reading noise."
-    ::= { espDevice 16 }
-
-espDeviceSupplyVoltage OBJECT-TYPE
-    SYNTAX Gauge32
-    UNITS "millivolts"
-    MAX-ACCESS read-only
-    STATUS current
-    DESCRIPTION
-        "Internal supply from ESP.getVcc() (ADC_MODE(ADC_VCC)).
-         Reading is biased LOW by the NodeMCU A0 resistor divider —
-         treat as relative/indicative unless scaled for your board;
-         compilation flag ESP_SNMP_NO_VCC removes the object
-         driver-side."
-    ::= { espDevice 17 }
-
-espDeviceProcesses OBJECT-TYPE
-    SYNTAX Gauge32
-    MAX-ACCESS read-only
-    STATUS current
-    DESCRIPTION
-        "Running processes. Espressif NONOS SDK is cooperative: no
-         scheduler, no process table; the single firmware image is
-         the only 'process', so this is always 1."
-    ::= { espDevice 18 }
-
-espDeviceHeapTotal OBJECT-TYPE
-    SYNTAX Gauge32
-    UNITS "bytes"
-    MAX-ACCESS read-only
-    STATUS current
-    DESCRIPTION
-        "Defensible heap snapshot at boot: the SDK exposes no heap
-         total (heap = user RAM not consumed by firmware
-         globals/stacks), so free heap at first loop is recorded as
-         total."
-    ::= { espDevice 19 }
-
-espDeviceHeapUtilization OBJECT-TYPE
-    SYNTAX Gauge32 (0..100)
-    UNITS "percent"
-    MAX-ACCESS read-only
-    STATUS current
-    DESCRIPTION
-        "100*(1 - espDeviceFreeHeap/espDeviceHeapTotal)."
-    ::= { espDevice 20 }
-
-espDeviceRamTotal OBJECT-TYPE
-    SYNTAX Gauge32
-    UNITS "bytes"
-    MAX-ACCESS read-only
-    STATUS current
-    DESCRIPTION
-        "Physical DRAM: 81920 bytes on ESP8266EX (linker/platform
-         constant, not SDK-observed)."
-    ::= { espDevice 21 }
-
---
--- Flash group
---
-espFlash OBJECT-IDENTITY
-    STATUS current
-    DESCRIPTION
-        "Flash chip geometry. Useful for judging whether an OTA update
-         will fit; none of these change at runtime."
-    ::= { espSnmpMib 3 }
-
-espFlashChipRealSize OBJECT-TYPE
-    SYNTAX Gauge32
-    UNITS "bytes"
-    MAX-ACCESS read-only
-    STATUS current
-    DESCRIPTION
-        "Actual flash chip size detected on the SPI bus
-         (ESP.getFlashChipRealSize()). Can differ from the size the
-         image was linked for."
-    ::= { espFlash 1 }
-
-espFlashSketchSize OBJECT-TYPE
-    SYNTAX Gauge32
-    UNITS "bytes"
-    MAX-ACCESS read-only
-    STATUS current
-    DESCRIPTION "Flash consumed by the running firmware image (ESP.getSketchSize())."
-    ::= { espFlash 2 }
-
-espFlashSketchSpaceFree OBJECT-TYPE
-    SYNTAX Gauge32
-    UNITS "bytes"
-    MAX-ACCESS read-only
-    STATUS current
-    DESCRIPTION
-        "Space available for OTA updates (ESP.getFreeSketchSpace())."
-    ::= { espFlash 3 }
-
-espFlashChipSpeed OBJECT-TYPE
-    SYNTAX Gauge32
-    UNITS "hertz"
-    MAX-ACCESS read-only
-    STATUS current
-    DESCRIPTION "Flash chip operating frequency (ESP.getFlashChipSpeed())."
-    ::= { espFlash 4 }
-
 --
 -- WiFi group (station role)
 --
@@ -380,7 +264,7 @@ espSnmpMibCompliance MODULE-COMPLIANCE
     STATUS current
     DESCRIPTION "Everything is mandatory; the MIB is small."
     MODULE -- this module
-    MANDATORY-GROUPS { espDeviceGroup, espWifiGroup, espFlashGroup,
+    MANDATORY-GROUPS { espDeviceGroup, espWifiGroup,
                        espTrapGroup }
     OBJECT espDeviceHeapLimit
     DESCRIPTION "Write access is optional (agent may run with default)."
@@ -392,10 +276,7 @@ espDeviceGroup OBJECT-GROUP
         espDeviceFreeHeap, espDeviceHeapLimit, espDeviceMaxFreeBlock,
         espDeviceHeapFragmentation, espDeviceLedState, espDeviceReset,
         espDeviceResetReason, espDeviceHardware, espDeviceCpuFreq,
-        espDeviceSdkVersion, espDeviceAuthFails, espDeviceCpuCores,
-        espDeviceCpuUtilization, espDeviceSupplyVoltage,
-        espDeviceProcesses, espDeviceHeapTotal,
-        espDeviceHeapUtilization, espDeviceRamTotal
+        espDeviceSdkVersion, espDeviceAuthFails
     }
     STATUS current
     DESCRIPTION "Device identity, heap health and control."
@@ -409,13 +290,6 @@ espWifiGroup OBJECT-GROUP
     STATUS current
     DESCRIPTION "WiFi association state."
     ::= { espSnmpMibConformance 3 }
-
-espFlashGroup OBJECT-GROUP
-    OBJECTS { espFlashChipRealSize, espFlashSketchSize,
-              espFlashSketchSpaceFree, espFlashChipSpeed }
-    STATUS current
-    DESCRIPTION "Flash geometry."
-    ::= { espSnmpMibConformance 4 }
 
 espTrapGroup NOTIFICATION-GROUP
     NOTIFICATIONS { espTrapBoot, espTrapLowHeap }

@@ -1,19 +1,11 @@
 // ESP8266 SNMP agent firmware — v1 + v2c, GET/GETNEXT/GETBULK/SET, traps.
 // Engine: SNMP_Embedded v3.4.4 (vendored at lib/SNMP_Embedded, MIT).
 // Device MIB: mibs/ESP8266-SNMP-MIB.mib (OIDs frozen, enterprise 99999).
-// ESP_SNMP_ENABLE_VCC (opt-in): serves espDeviceSupplyVoltage via
-// ESP.getVcc(). DISABLED BY DEFAULT: on boards with an A0 voltage divider
-// (NodeMCU, Wemos D1) ADC_VCC mode is known to break WiFi association
-// (verified live on this device: boots fine, never associates). It reads
-// LOW due to the divider. Enable only on bare-module builds without the
-// divider. Macro must expand before the core reads it in init().
+// Host Resources (CPU/mem/flash) live under RFC 2790 .1.3.6.1.2.1.25.
 #include <ESP8266WiFi.h>
 #include <WiFiUdp.h>
 #include <SNMP_Embedded.h>
 #include <cstring>
-#ifdef ESP_SNMP_ENABLE_VCC
-ADC_MODE(ADC_VCC)
-#endif
 
 #ifndef WIFI_SSID
 #define WIFI_SSID "changeme"
@@ -78,14 +70,15 @@ static const char* sdkVersion = "";   // assigned once at boot (getSdkVersion)
 static char sdkVersionBuf[33];
 static uint32_t cpuFreq = 80;
 static uint32_t authFails = 0;
-// CPU/memory extension (espDevice 15-21 per MIB)
-static int cpuCores = 1;              // ESP8266EX single core
-static uint32_t cpuUtilization = 0;   // loop-rate proxy, 0..100 %
-static uint32_t supplyVoltage = 0;    // ESP.getVcc() mV (A0-divider biased)
-static uint32_t processes = 1;        // NONOS: no scheduler, one image
-static uint32_t heapTotal = 0;        // free heap snapshot at first loop
-static uint32_t heapUtilization = 0;  // 100*(1-free/total)
-static uint32_t ramTotal = 81920;     // ESP8266EX physical DRAM
+// Host Resources backing (RFC 2790 hr* OIDs served in setup())
+static int cpuUtilization = 0;        // hrProcessorLoad, loop-rate proxy 0..100 %
+static uint32_t processes = 1;        // hrSystemProcesses (NONOS: one image)
+static uint32_t heapTotal = 0;        // hrStorageSize RAM row: free heap at first loop
+static uint32_t heapUsed = 0;         // hrStorageUsed RAM row (total-free)
+static int hrRamSize = 0, hrRamUsed = 0;       // Integer32 mirrors (RFC: Integer32)
+static int hrFlashSize = 0, hrFlashUsed = 0;   // Integer32 mirrors (RFC: Integer32)
+static uint32_t hrUptime = 0;          // hrSystemUptime (TimeTicks), = millis()
+static int hrMemSizeInt = 80;          // hrMemorySize in KBytes (RFC KBytes is INTEGER)
 
 // WiFi group
 static uint32_t wifiState = 1;      // 0 down / 1 connecting / 2 up
@@ -183,6 +176,23 @@ class IpAddressCallback: public ValueCallback {
     }
 };
 
+
+// ReadOnlyOidCallback: fixed OID *value* (hrStorageType, hrDeviceType).
+// SET always rejected; the value is not a managed pointer.
+class ReadOnlyOidCallback: public ValueCallback {
+  public:
+    ReadOnlyOidCallback(SortableOIDType* oid, const char* valueOidStr)
+        : ValueCallback(oid, ASN_TYPE::OID), valueOidStr(valueOidStr) {}
+    const char* getAccessTag() const noexcept override { return "RO"; }
+  protected:
+    const char* const valueOidStr;
+    AsnPtr<BER_CONTAINER> buildTypeWithValueRaw() override {
+      return AsnPtr<BER_CONTAINER>(asn_new<OIDType>(valueOidStr));
+    }
+    SNMP_ERROR_STATUS setTypeWithValue(BER_CONTAINER*) override {
+      return READ_ONLY;
+    }
+};
 // ---------------- traps ------------------------------------------------------
 
 // Static trap objects: no pool-backed state may survive between sends
@@ -195,6 +205,13 @@ static SNMPTrap lowHeapTrapV1("public", SNMP_VERSION_1);
 static SNMPTrap authTrapV1("public", SNMP_VERSION_1);
 
 static void sendTrapToAll(SNMPTrap& v2t, SNMPTrap& v1t) {
+  // OOM guard: with the RFC2790 registration set the ASN pool leaves the
+  // ESP8266 thin headroom at boot; building a trap below 4 KiB free is what
+  // crashed the agent (Exception 29) before WiFi associated. Skip, don't die.
+  if (ESP.getFreeHeap() < 4096) {
+    Serial.println("[SNMP] trap skipped: free heap < 4096 (OOM guard)");
+    return;
+  }
   SNMPTrap& t = trapV1 ? v1t : v2t;
   t.setIP(WiFi.localIP());
   t.setUDP(&udp);
@@ -215,6 +232,7 @@ static void setupTrap(SNMPTrap& t, const char* snmpTrapOid, int v1Generic,
 
 static void refresh() {
   const uint32_t ms = millis();
+  hrUptime = ms;                        // hrSystemUptime: host uptime == app uptime
   freeHeap = ESP.getFreeHeap();
   maxFreeBlock = ESP.getMaxFreeBlockSize();
   frag = ESP.getHeapFragmentation();
@@ -243,15 +261,13 @@ static void refresh() {
   ifInOctets = (uint32_t)ASNPool::rxBytes;
   ifOutOctets = (uint32_t)ASNPool::txBytes;
   // Heap total: SDK has no heap "total"; free-at-first-loop is the defensible
-  // snapshot. Utilization derived; voltage via getVcc (divider-biased, mV).
+  // snapshot (hrStorageSize RAM row). hr* int mirrors obey RFC Integer32.
   if (heapTotal == 0 && freeHeap > 0) heapTotal = freeHeap;
-  if (heapTotal) {
-    heapUtilization = freeHeap >= heapTotal ? 0
-        : (uint32_t)(100UL * (heapTotal - freeHeap) / heapTotal);
-  }
-#ifdef ESP_SNMP_ENABLE_VCC
-  supplyVoltage = ESP.getVcc();
-#endif
+  heapUsed = heapTotal >= freeHeap ? heapTotal - freeHeap : 0;
+  hrRamSize = (int)heapTotal;
+  hrRamUsed = (int)heapUsed;
+  hrFlashSize = (int)flashRealSize;
+  hrFlashUsed = (int)sketchSize;
 
   // WiFi/interface state
   if (WiFi.status() == WL_CONNECTED) {
@@ -358,17 +374,6 @@ void setup() {
     snmp.addReadWriteStringHandler(".1.3.6.1.4.1.99999.1.13.0", &sdkPtr, sizeof(sdkVersionBuf), false);
   }
   snmp.addCounter32Handler(".1.3.6.1.4.1.99999.1.14.0", &authFails);
-  // CPU/memory extension (espDevice 15-21; see MIB DESCRIPTIONs for the
-  // proxy semantics and the NONOS single-process truth)
-  snmp.addIntegerHandler(".1.3.6.1.4.1.99999.1.15.0", &cpuCores);
-  snmp.addGaugeHandler(".1.3.6.1.4.1.99999.1.16.0", &cpuUtilization);
-#ifdef ESP_SNMP_ENABLE_VCC
-  snmp.addGaugeHandler(".1.3.6.1.4.1.99999.1.17.0", &supplyVoltage);
-#endif
-  snmp.addGaugeHandler(".1.3.6.1.4.1.99999.1.18.0", &processes);
-  snmp.addGaugeHandler(".1.3.6.1.4.1.99999.1.19.0", &heapTotal);
-  snmp.addGaugeHandler(".1.3.6.1.4.1.99999.1.20.0", &heapUtilization);
-  snmp.addGaugeHandler(".1.3.6.1.4.1.99999.1.21.0", &ramTotal);
 
   // ---- WiFi group ---------------------------------------------------
   snmp.addIntegerHandler(".1.3.6.1.4.1.99999.2.1.0", (int*)&wifiState);
@@ -384,11 +389,44 @@ void setup() {
   snmp.addPrebuiltHandler(new IpAddressCallback(
       new SortableOIDType(".1.3.6.1.4.1.99999.2.6.0"), &staIp));
 
-  // ---- flash group ---------------------------------------------------
-  snmp.addGaugeHandler(".1.3.6.1.4.1.99999.3.1.0", &flashRealSize);
-  snmp.addGaugeHandler(".1.3.6.1.4.1.99999.3.2.0", &sketchSize);
-  snmp.addGaugeHandler(".1.3.6.1.4.1.99999.3.3.0", &sketchFree);
-  snmp.addGaugeHandler(".1.3.6.1.4.1.99999.3.4.0", &flashChipSpeed);
+  // ---- RFC2790 hostResources group -----------------------------------
+  // hrSystem
+  snmp.addTimestampHandler(".1.3.6.1.2.1.25.1.1.0", &hrUptime);   // hrSystemUptime
+  snmp.addGaugeHandler(".1.3.6.1.2.1.25.1.6.0", &processes);   // hrSystemProcesses
+  snmp.addIntegerHandler(".1.3.6.1.2.1.25.2.2.0", &hrMemSizeInt);  // hrMemorySize (KiB; RFC KBytes is INTEGER)
+  // hrStorageTable.1 = RAM, .2 = Flash
+  static int hrStorageIndex1 = 1, hrStorageIndex2 = 2;
+  static int hrStorageAllocUnits = 1;
+  static uint32_t hrStorageAllocFails = 0;
+  snmp.addIntegerHandler(".1.3.6.1.2.1.25.2.3.1.1.1", &hrStorageIndex1);
+  snmp.addIntegerHandler(".1.3.6.1.2.1.25.2.3.1.1.2", &hrStorageIndex2);
+  snmp.addPrebuiltHandler(new ReadOnlyOidCallback(          // hrStorageType.1
+      new SortableOIDType(".1.3.6.1.2.1.25.2.3.1.2.1"), ".1.3.6.1.2.1.25.2.1.2"));
+  snmp.addPrebuiltHandler(new ReadOnlyOidCallback(          // hrStorageType.2
+      new SortableOIDType(".1.3.6.1.2.1.25.2.3.1.2.2"), ".1.3.6.1.2.1.25.2.1.9"));
+  snmp.addReadOnlyStaticStringHandler(".1.3.6.1.2.1.25.2.3.1.3.1", "RAM");
+  snmp.addReadOnlyStaticStringHandler(".1.3.6.1.2.1.25.2.3.1.3.2", "Flash");
+  snmp.addIntegerHandler(".1.3.6.1.2.1.25.2.3.1.4.1", &hrStorageAllocUnits);
+  snmp.addIntegerHandler(".1.3.6.1.2.1.25.2.3.1.4.2", &hrStorageAllocUnits);
+  snmp.addIntegerHandler(".1.3.6.1.2.1.25.2.3.1.5.1", &hrRamSize);   // hrStorageSize RAM
+  snmp.addIntegerHandler(".1.3.6.1.2.1.25.2.3.1.6.1", &hrRamUsed);   // hrStorageUsed RAM
+  snmp.addIntegerHandler(".1.3.6.1.2.1.25.2.3.1.5.2", &hrFlashSize);  // hrStorageSize Flash
+  snmp.addIntegerHandler(".1.3.6.1.2.1.25.2.3.1.6.2", &hrFlashUsed); // hrStorageUsed Flash
+  snmp.addCounter32Handler(".1.3.6.1.2.1.25.2.3.1.7.1", &hrStorageAllocFails);
+  snmp.addCounter32Handler(".1.3.6.1.2.1.25.2.3.1.7.2", &hrStorageAllocFails);
+  // hrDeviceTable row 1 = the CPU
+  snmp.addPrebuiltHandler(new ReadOnlyOidCallback(          // hrDeviceType.1
+      new SortableOIDType(".1.3.6.1.2.1.25.3.2.1.2.1"), ".1.3.6.1.2.1.25.3.1.3"));
+  snmp.addReadOnlyStaticStringHandler(".1.3.6.1.2.1.25.3.2.1.3.1", hardware);  // hrDeviceDescr.1
+  static int hrDeviceStatusRunning = 2;                     // running(2)
+  snmp.addIntegerHandler(".1.3.6.1.2.1.25.3.2.1.5.1", &hrDeviceStatusRunning);
+  snmp.addIntegerHandler(".1.3.6.1.2.1.25.3.3.1.2.1", &cpuUtilization);  // hrProcessorLoad.1
+  // ponytail: hrSWRun*/hrFS* rows do not fit the ESP8266SNMP RAM budget
+  // (cap-88 pool leaves ~2 KiB; WiFi cannot associate — measured on-device).
+  // Each hr* column costs one pool slot; re-add from this diff's history when
+  // the target is an ESP32 or the engine gains table-row subhandlers.
+
+
 
   snmp.sortHandlers();   // mandatory: enables GETNEXT walk order
 

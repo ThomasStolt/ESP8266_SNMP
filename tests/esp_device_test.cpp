@@ -59,6 +59,9 @@
 #define OID_heapLimit       ".1.3.6.1.4.1.99999.1.5.0"
 #define OID_ledState        ".1.3.6.1.4.1.99999.1.8.0"
 #define OID_snmpTrapOID     ".1.3.6.1.6.3.1.1.4.1.0"
+#define OID_hrSystemProcesses ".1.3.6.1.2.1.25.1.6.0"
+#define OID_hrProcessorLoad   ".1.3.6.1.2.1.25.3.3.1.2.1"
+#define OID_hrStorageUsedRam  ".1.3.6.1.2.1.25.2.3.1.6.1"
 
 /* Common build route: the same flag-dispatch loop() uses (mirrors the
  * vendored tests.cpp helper of the same name). */
@@ -120,6 +123,9 @@ struct DeviceRoster {
     uint32_t heapLimit = 16384;
     uint32_t ifInUcastPkts = 123456;
     uint32_t ifOutUcastPkts = 654321;
+    uint32_t processes = 1;             /* hrSystemProcesses (Gauge32) */
+    int hrCpuLoad = 42;                 /* hrProcessorLoad (Integer32) */
+    int ramUsed = 512;                  /* hrStorageUsed RAM row (Integer32) */
 
     IntegerCallback* sysServicesCb;
     IntegerCallback* ledWritableCb;
@@ -134,6 +140,9 @@ struct DeviceRoster {
             new Gauge32Callback(new SortableOIDType(OID_heapLimit), &heapLimit),
             new Counter32Callback(new SortableOIDType(OID_ifInUcastPkts), &ifInUcastPkts),
             new Counter32Callback(new SortableOIDType(OID_ifOutUcastPkts), &ifOutUcastPkts),
+            new Gauge32Callback(new SortableOIDType(OID_hrSystemProcesses), &processes),
+            new IntegerCallback(new SortableOIDType(OID_hrProcessorLoad), &hrCpuLoad),
+            new IntegerCallback(new SortableOIDType(OID_hrStorageUsedRam), &ramUsed),
         };
         sysServicesCb = static_cast<IntegerCallback*>(cbs[2]);
         ledWritableCb->isSettable = true;
@@ -257,6 +266,34 @@ TEST_CASE( "esp: multi-varbind GET answered with equal varbind count (2 and 4 VB
         REQUIRE( static_cast<Counter32*>(response[3].value)->_value == 123456 );
         delete request;
     }
+}
+
+/* ==========================================================================
+ * 2b. RFC 2790 Host Resources GET — one multi-varbind request across the
+ *     hrSystemProcesses / hrProcessorLoad / hrStorageUsed (RAM row) arcs,
+ *     answered in request order with the MIB-declared SYNTAX types.
+ * ========================================================================== */
+TEST_CASE( "esp: RFC 2790 host resources OIDs answered in one multi-varbind GET", "[esp]" ){
+    DeviceRoster roster;
+    uint8_t buf[800] = {0};
+    int respLen = 0;
+
+    const char* oids[] = { OID_hrSystemProcesses, OID_hrProcessorLoad, OID_hrStorageUsedRam };
+    SNMPPacket* request = buildGetRequest(oids, 3);
+    SNMPPacket response;
+    REQUIRE( serveGet(request, roster.callbacks, roster.count, buf, sizeof(buf), &respLen, &response) );
+    REQUIRE( response.size() == 3 );
+    REQUIRE( oidMatches(response[0].oid, OID_hrSystemProcesses) );
+    REQUIRE( oidMatches(response[1].oid, OID_hrProcessorLoad) );
+    REQUIRE( oidMatches(response[2].oid, OID_hrStorageUsedRam) );
+    /* hrSystemProcesses: Gauge32 (0x42); CPU + storage columns: INTEGER (0x02) */
+    REQUIRE( response[0].type == GAUGE32 );
+    REQUIRE( static_cast<Gauge*>(response[0].value)->_value == 1 );
+    REQUIRE( response[1].type == INTEGER );
+    REQUIRE( static_cast<IntegerType*>(response[1].value)->_value == 42 );
+    REQUIRE( response[2].type == INTEGER );
+    REQUIRE( static_cast<IntegerType*>(response[2].value)->_value == 512 );
+    delete request;
 }
 
 /* ==========================================================================
